@@ -20,4 +20,4 @@ void popColor();
 
 void drawPoint(vec3 a);
 void drawLine(vec3 a, vec3 b);
-void drawTriangle(vec3 a, vec3 b, vec3 c);
+void drawTriangle(vec3 a, vec3 b, vec3 c/*, bool solid, bool line*/);

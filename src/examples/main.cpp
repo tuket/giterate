@@ -141,7 +141,6 @@ struct RenderData {
 	u32 pointsVbo, pointsVao;
 	u32 linesVbo, linesVao;
 	u32 trianglesVbo, trianglesVao;
-	u32 transparentTrianglesVbo, transparentTrianglesVao;
 
 	struct UnifLocs {
 		i32 viewProj;
@@ -177,7 +176,6 @@ struct State { // this current state of the frame
 	std::vector<Point> points;
 	std::vector<Line> lines;
 	std::vector<Triangle> triangles;
-	std::vector<Triangle> transparentTriangles;
 } s_state;
 
 void pushColor(vec4 c) { s_state.color.push_back(c); }
@@ -209,29 +207,6 @@ void drawLine(vec3 a, vec3 b)
 	});
 }
 
-void drawTriangle(vec3 a, vec3 b, vec3 c)
-{
-	const mat4 m = s_state.mtx.back();
-	const vec4 color = s_state.color.back();
-	a = m * vec4(a, 1);
-	b = m * vec4(b, 1);
-	c = m * vec4(c, 1);
-	if(color.a >= 1) {
-		s_state.triangles.push_back({
-			Point{a, color},
-			Point{b, color},
-			Point{c, color}
-		});
-	}
-	else {
-		s_state.transparentTriangles.push_back({
-			Point{a, color},
-			Point{b, color},
-			Point{c, color}
-		});
-	}
-}
-
 static void startRender()
 {
 	s_state.color.resize(1);
@@ -241,43 +216,21 @@ static void startRender()
 	s_state.points.clear();
 	s_state.lines.clear();
 	s_state.triangles.clear();
-	s_state.transparentTriangles.clear();
-
-	int w, h;
-	glfwGetWindowSize(window, &w, &h);
-	glViewport(0, 0, w, h);
-	glScissor(0, 0, w, h);
-
-	glDisable(GL_DEPTH_TEST);
-	glDepthMask(GL_TRUE);
-	glClearColor(0, 0.1f, 0.2f, 1);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
 static void endRender()
 {
 	int w, h;
 	glfwGetWindowSize(window, &w, &h);
+	glViewport(0, 0, w, h);
+	glScissor(0, 0, w, h);
+	glClearColor(0, 0.1f, 0.2f, 1);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	const mat4 viewMtx = glm::affineInverse(g_userData.camera.fps.getMtx());
 	const mat4 projMtx = glm::perspective(g_userData.camera.fovY, float(w) / h, 0.02f, 10000.f);
 	const mat4 viewProjMtx = projMtx * viewMtx;
 	glUniformMatrix4fv(s_renderData.unifLocs.viewProj, 1, GL_FALSE, &viewProjMtx[0][0]);
-
-	glEnable(GL_DEPTH_TEST);
-	glDepthFunc(GL_LEQUAL);
-	glDepthMask(GL_TRUE);  
-	glDisable(GL_BLEND);
-
-	// triangles
-	{
-		const u32 n = s_state.triangles.size();
-		glBindBuffer(GL_ARRAY_BUFFER, s_renderData.trianglesVbo);
-		glBufferData(GL_ARRAY_BUFFER, n * sizeof(Triangle), s_state.triangles.data(), GL_STREAM_DRAW);
-		//glBufferSubData(GL_VERTEX_ARRAY, 0, n * sizeof(Line), s_state.lines.data());
-		glBindVertexArray(s_renderData.trianglesVao);
-		glDrawArrays(GL_TRIANGLES, 0, 3*n);
-	}
 
 	// lines
 	{
@@ -298,21 +251,6 @@ static void endRender()
 		glBindVertexArray(s_renderData.pointsVao);
 		glDrawArrays(GL_POINTS, 0, n);
 	}
-
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glDepthMask(GL_FALSE);  
-
-	// transparent triangles
-	{
-		const u32 n = s_state.transparentTriangles.size();
-		glBindBuffer(GL_ARRAY_BUFFER, s_renderData.transparentTrianglesVbo);
-		glBufferData(GL_ARRAY_BUFFER, n * sizeof(Triangle), s_state.transparentTriangles.data(), GL_STREAM_DRAW);
-		//glBufferSubData(GL_VERTEX_ARRAY, 0, n * sizeof(Line), s_state.lines.data());
-		glBindVertexArray(s_renderData.transparentTrianglesVao);
-		glDrawArrays(GL_TRIANGLES, 0, 3*n);
-	}
-
 }
 
 static void onKey(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -320,9 +258,6 @@ static void onKey(GLFWwindow* window, int key, int scancode, int action, int mod
 	const bool pressed = action == GLFW_PRESS || action == GLFW_REPEAT;
 	switch (key)
 	{
-	case GLFW_KEY_ESCAPE:
-		glfwSetWindowShouldClose(window, true);
-		break;
 	case GLFW_KEY_W:
 		s_pressed.w = pressed;
 		break;
@@ -383,9 +318,6 @@ static void appDraws()
 {
 	if (g_userData.flags.showAxes)
 	{
-		glDisable(GL_DEPTH_TEST);
-		glDisable(GL_BLEND);
-
 		pushColor({ 1,0,0,1 });
 			drawLine({ 0,0,0 }, { 1000,0,0 });
 		popColor();
@@ -489,23 +421,29 @@ int main()
 		glGetUniformLocation(s_renderData.shaderProg, "u_viewProj");
 	}
 
-	auto setupVaoVbo = [&](u32& vao, u32& vbo)
-	{
-		glGenVertexArrays(1, &vao);
-		glBindVertexArray(vao);
-		glGenBuffers(1, &vbo);
-		glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	{ // points
+		glGenVertexArrays(1, &s_renderData.pointsVao);
+		glBindVertexArray(s_renderData.pointsVao);
+		glGenBuffers(1, &s_renderData.pointsVbo);
+		glBindBuffer(GL_ARRAY_BUFFER, s_renderData.pointsVbo);
 		glBufferData(GL_ARRAY_BUFFER, 1, nullptr, GL_STREAM_DRAW);
 		glEnableVertexAttribArray(0);
 		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Point), nullptr);
 		glEnableVertexAttribArray(1);
 		glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Point), (void*)(sizeof(vec3)));
-	};
+	}
 
-	setupVaoVbo(s_renderData.pointsVao, s_renderData.pointsVbo);
-	setupVaoVbo(s_renderData.linesVao, s_renderData.linesVbo);
-	setupVaoVbo(s_renderData.trianglesVao, s_renderData.trianglesVbo);
-	setupVaoVbo(s_renderData.transparentTrianglesVao, s_renderData.transparentTrianglesVbo);
+	{ // lines
+		glGenVertexArrays(1, &s_renderData.linesVao);
+		glBindVertexArray(s_renderData.linesVao);
+		glGenBuffers(1, &s_renderData.linesVbo);
+		glBindBuffer(GL_ARRAY_BUFFER, s_renderData.linesVbo);
+		glBufferData(GL_ARRAY_BUFFER, 1, nullptr, GL_STREAM_DRAW);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Point), nullptr);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Point), (void*)(sizeof(vec3)));
+	}
 
 	userInit();
 
